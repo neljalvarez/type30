@@ -34,7 +34,7 @@ export function TypingResults({
           <h2 id="results-heading" className="text-sm uppercase tracking-widest text-muted-foreground">
             Words per minute
           </h2>
-          <p className="font-mono text-8xl font-semibold leading-none text-primary tabular-nums md:text-9xl">
+          <p className="font-mono text-8xl font-semibold leading-none tabular-nums md:text-9xl" style={{ color: '#F65135' }}>
             {stats.wpm}
           </p>
           <p className="text-lg text-foreground">{rating(stats.wpm)}</p>
