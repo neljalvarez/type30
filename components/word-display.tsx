@@ -10,14 +10,26 @@ function Caret() {
   )
 }
 
+function BossCaret() {
+  return (
+    <span className="relative" aria-hidden="true">
+      {'\u200b'}
+      <span className="absolute -left-px top-1/2 h-[1.1em] w-0.5 -translate-y-1/2 rounded-full bg-foreground/45" />
+      <span className="absolute -left-[3px] -top-[0.55em] size-1.5 rounded-full bg-foreground/45" />
+    </span>
+  )
+}
+
 const Word = memo(function Word({
   target,
   input,
   state,
+  bossChar,
 }: {
   target: string
   input: string
   state: 'done' | 'active' | 'pending'
+  bossChar?: number
 }) {
   const isWrongWord = state === 'done' && input !== target
   const extra = input.slice(target.length)
@@ -34,6 +46,7 @@ const Word = memo(function Word({
         }
         return (
           <span key={i} className={color}>
+            {bossChar === i && <BossCaret />}
             {state === 'active' && i === input.length && <Caret />}
             {char}
           </span>
@@ -45,6 +58,7 @@ const Word = memo(function Word({
         </span>
       ))}
       {state === 'active' && input.length >= target.length && <Caret />}
+      {bossChar !== undefined && bossChar >= target.length && <BossCaret />}
     </span>
   )
 })
@@ -54,11 +68,15 @@ export function WordDisplay({
   typed,
   current,
   blurred,
+  bossWord,
+  bossChar,
 }: {
   words: string[]
   typed: string[]
   current: string
   blurred: boolean
+  bossWord?: number
+  bossChar?: number
 }) {
   const activeIndex = typed.length
   const activeRef = useRef<HTMLSpanElement>(null)
@@ -87,7 +105,7 @@ export function WordDisplay({
           const input = i < activeIndex ? typed[i] : i === activeIndex ? current : ''
           return (
             <span key={i} ref={i === activeIndex ? activeRef : undefined}>
-              <Word target={word} input={input} state={state} />
+              <Word target={word} input={input} state={state} bossChar={bossWord === i ? bossChar : undefined} />
             </span>
           )
         })}
