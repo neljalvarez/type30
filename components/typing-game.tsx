@@ -3,27 +3,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { RotateCcw } from 'lucide-react'
 import { generateWords } from '@/lib/words'
+import { BOSS_TIERS, bossCharsAt, bossPosition, type BossConfig } from '@/lib/boss'
+import {
+  computeConsistency,
+  countCorrectChars,
+  toWpm,
+  type KeyStats,
+  type SecondSample,
+  type WordTiming,
+} from '@/lib/typing-stats'
 import { TypingResults, type TypingStats } from '@/components/typing-results'
 import { WordDisplay } from '@/components/word-display'
+import { ModeSelector, type Mode } from '@/components/mode-selector'
+import { BossRace } from '@/components/boss-race'
 
 const DURATION = 30
 
 type Status = 'idle' | 'running' | 'finished'
-
-function countCorrectChars(words: string[], typed: string[], current: string) {
-  let count = 0
-  typed.forEach((word, i) => {
-    if (word === words[i]) count += word.length + 1
-  })
-  const target = words[typed.length]
-  if (target && current && target.startsWith(current)) count += current.length
-  return count
-}
-
-function toWpm(chars: number, seconds: number) {
-  if (seconds <= 0) return 0
-  return Math.round(chars / 5 / (seconds / 60))
-}
 
 export function TypingGame() {
   const [seed, setSeed] = useState(2026)
@@ -32,15 +28,32 @@ export function TypingGame() {
   const [current, setCurrent] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [timeLeft, setTimeLeft] = useState(DURATION)
+  const [elapsed, setElapsed] = useState(0)
   const [focused, setFocused] = useState(false)
   const [stats, setStats] = useState<TypingStats | null>(null)
+  const [mode, setMode] = useState<Mode>('solo')
+  const [boss, setBoss] = useState<BossConfig>({
+    tierId: BOSS_TIERS[1].id,
+    name: BOSS_TIERS[1].name,
+    wpm: BOSS_TIERS[1].wpm,
+  })
 
   const inputRef = useRef<HTMLInputElement>(null)
   const startTimeRef = useRef(0)
   const typedRef = useRef<string[]>([])
   const currentRef = useRef('')
   const keystrokesRef = useRef({ correct: 0, total: 0 })
-  const historyRef = useRef<number[]>([])
+  const errorsRef = useRef(0)
+  const backspacesRef = useRef(0)
+  const samplesRef = useRef<SecondSample[]>([])
+  const lastSampleRef = useRef({ total: 0, errors: 0 })
+  const keyStatsRef = useRef<KeyStats>({})
+  const wordTimingsRef = useRef<WordTiming[]>([])
+  const lastWordAtRef = useRef(0)
+
+  const focusInput = useCallback(() => {
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }, [])
 
   const restart = useCallback(() => {
     const nextSeed = Math.floor(Math.random() * 2 ** 31)
@@ -50,43 +63,77 @@ export function TypingGame() {
     setCurrent('')
     setStatus('idle')
     setTimeLeft(DURATION)
+    setElapsed(0)
     setStats(null)
     typedRef.current = []
     currentRef.current = ''
     keystrokesRef.current = { correct: 0, total: 0 }
-    historyRef.current = []
-    requestAnimationFrame(() => inputRef.current?.focus())
-  }, [])
+    errorsRef.current = 0
+    backspacesRef.current = 0
+    samplesRef.current = []
+    lastSampleRef.current = { total: 0, errors: 0 }
+    keyStatsRef.current = {}
+    wordTimingsRef.current = []
+    focusInput()
+  }, [focusInput])
 
   const finish = useCallback(() => {
     const correctChars = countCorrectChars(words, typedRef.current, currentRef.current)
     const { correct, total } = keystrokesRef.current
+    const samples = samplesRef.current
+    const typedWords = typedRef.current
+    const wordsTyped = typedWords.filter((w, i) => w === words[i]).length
+
     setStats({
       wpm: toWpm(correctChars, DURATION),
       rawWpm: toWpm(total, DURATION),
       accuracy: total === 0 ? 0 : Math.round((correct / total) * 100),
       correctChars: correct,
       incorrectChars: total - correct,
-      wordsTyped: typedRef.current.filter((w, i) => w === words[i]).length,
-      history: historyRef.current,
+      wordsTyped,
+      wordsMissed: typedWords.length - wordsTyped,
+      backspaces: backspacesRef.current,
+      consistency: computeConsistency(samples.map((s) => s.raw)),
+      peakWpm: Math.max(0, ...samples.slice(2).map((s) => s.wpm)),
+      samples,
+      keyStats: keyStatsRef.current,
+      wordTimings: wordTimingsRef.current,
+      boss:
+        mode === 'boss'
+          ? {
+              name: boss.name,
+              wpm: boss.wpm,
+              chars: Math.round(bossCharsAt(boss.wpm, DURATION)),
+              playerChars: correctChars,
+            }
+          : null,
     })
     setStatus('finished')
     inputRef.current?.blur()
-  }, [words])
+  }, [words, mode, boss])
 
   useEffect(() => {
     if (status !== 'running') return
     const interval = setInterval(() => {
-      const elapsed = (performance.now() - startTimeRef.current) / 1000
-      const elapsedWhole = Math.min(Math.floor(elapsed), DURATION)
+      const now = (performance.now() - startTimeRef.current) / 1000
+      const elapsedWhole = Math.min(Math.floor(now), DURATION)
 
-      while (historyRef.current.length < elapsedWhole) {
-        const second = historyRef.current.length + 1
+      while (samplesRef.current.length < elapsedWhole) {
+        const second = samplesRef.current.length + 1
         const chars = countCorrectChars(words, typedRef.current, currentRef.current)
-        historyRef.current.push(toWpm(chars, second))
+        const total = keystrokesRef.current.total
+        const errors = errorsRef.current
+        samplesRef.current.push({
+          second,
+          wpm: toWpm(chars, second),
+          raw: (total - lastSampleRef.current.total) * 12,
+          errors: errors - lastSampleRef.current.errors,
+        })
+        lastSampleRef.current = { total, errors }
       }
 
-      const remaining = Math.max(DURATION - elapsed, 0)
+      const remaining = Math.max(DURATION - now, 0)
+      setElapsed(Math.min(now, DURATION))
       setTimeLeft(Math.ceil(remaining))
       if (remaining <= 0) {
         clearInterval(interval)
@@ -104,6 +151,8 @@ export function TypingGame() {
         return
       }
       if (status === 'finished') return
+      const target = event.target as HTMLElement | null
+      if (target?.tagName === 'INPUT' && target !== inputRef.current) return
       if (document.activeElement !== inputRef.current && event.key.length === 1 && !event.metaKey && !event.ctrlKey) {
         inputRef.current?.focus()
       }
@@ -112,15 +161,29 @@ export function TypingGame() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [status, restart])
 
+  function recordKey(char: string, hit: boolean) {
+    const entry = (keyStatsRef.current[char] ??= { hits: 0, misses: 0 })
+    if (hit) entry.hits += 1
+    else entry.misses += 1
+  }
+
+  function registerKeystroke(hit: boolean) {
+    keystrokesRef.current.total += 1
+    if (hit) keystrokesRef.current.correct += 1
+    else errorsRef.current += 1
+  }
+
   function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
     if (status === 'finished') return
     setFocused(true)
     const value = event.target.value
     const previous = currentRef.current
     const target = words[typedRef.current.length] ?? ''
+    const now = performance.now()
 
     if (status === 'idle' && value.length > 0) {
-      startTimeRef.current = performance.now()
+      startTimeRef.current = now
+      lastWordAtRef.current = now
       setStatus('running')
     }
 
@@ -131,8 +194,12 @@ export function TypingGame() {
         currentRef.current = ''
         return
       }
-      keystrokesRef.current.total += 1
-      if (word === target) keystrokesRef.current.correct += 1
+      const hit = word === target
+      registerKeystroke(hit)
+      recordKey(' ', hit)
+      wordTimingsRef.current.push({ word: target, typed: word, ms: now - lastWordAtRef.current })
+      lastWordAtRef.current = now
+
       const nextTyped = [...typedRef.current, word]
       typedRef.current = nextTyped
       currentRef.current = ''
@@ -144,20 +211,34 @@ export function TypingGame() {
 
     if (value.length > previous.length) {
       for (let i = previous.length; i < value.length; i++) {
-        keystrokesRef.current.total += 1
-        if (value[i] === target[i]) keystrokesRef.current.correct += 1
+        const expected = target[i]
+        const hit = value[i] === expected
+        registerKeystroke(hit)
+        if (expected) recordKey(expected, hit)
       }
+    } else if (value.length < previous.length) {
+      backspacesRef.current += previous.length - value.length
     }
 
     currentRef.current = value
     setCurrent(value)
   }
 
+  function handleModeChange(next: Mode) {
+    setMode(next)
+    focusInput()
+  }
+
+  function handleBossChange(next: BossConfig) {
+    setBoss(next)
+    if (next.tierId !== 'custom') focusInput()
+  }
+
   const elapsedSeconds = DURATION - timeLeft
-  const liveWpm =
-    status === 'running' && elapsedSeconds >= 2
-      ? toWpm(countCorrectChars(words, typed, current), elapsedSeconds)
-      : 0
+  const playerChars = countCorrectChars(words, typed, current)
+  const liveWpm = status === 'running' && elapsedSeconds >= 2 ? toWpm(playerChars, elapsedSeconds) : 0
+  const bossChars = mode === 'boss' && status === 'running' ? bossCharsAt(boss.wpm, elapsed) : 0
+  const bossCaret = mode === 'boss' && status === 'running' ? bossPosition(words, bossChars) : null
 
   if (status === 'finished' && stats) {
     return <TypingResults stats={stats} onRestart={restart} />
@@ -165,13 +246,18 @@ export function TypingGame() {
 
   return (
     <section aria-label="Typing test" className="flex w-full flex-col gap-8">
+      <ModeSelector
+        mode={mode}
+        onModeChange={handleModeChange}
+        boss={boss}
+        onBossChange={handleBossChange}
+        disabled={status === 'running'}
+      />
+
       <div className="flex items-end justify-between font-mono">
         <div className="flex flex-col">
           <span className="text-xs uppercase tracking-widest text-muted-foreground">Time</span>
-          <span
-            className="text-5xl font-semibold tabular-nums text-primary"
-            aria-live="off"
-          >
+          <span className="text-5xl font-semibold tabular-nums text-primary" aria-live="off">
             {timeLeft}
           </span>
         </div>
@@ -181,12 +267,22 @@ export function TypingGame() {
         </div>
       </div>
 
-      <div className="h-1 w-full overflow-hidden rounded-full bg-secondary" aria-hidden="true">
-        <div
-          className="h-full rounded-full bg-primary transition-[width] duration-200 ease-linear"
-          style={{ width: `${(timeLeft / DURATION) * 100}%` }}
+      {mode === 'boss' ? (
+        <BossRace
+          playerChars={playerChars}
+          bossChars={bossChars}
+          bossName={boss.name}
+          bossWpm={boss.wpm}
+          finishChars={bossCharsAt(boss.wpm, DURATION)}
         />
-      </div>
+      ) : (
+        <div className="h-1 w-full overflow-hidden rounded-full bg-secondary" aria-hidden="true">
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-200 ease-linear"
+            style={{ width: `${(timeLeft / DURATION) * 100}%` }}
+          />
+        </div>
+      )}
 
       <div className="relative">
         <input
@@ -210,6 +306,8 @@ export function TypingGame() {
           typed={typed}
           current={current}
           blurred={!focused}
+          bossWord={bossCaret?.word}
+          bossChar={bossCaret?.char}
         />
         {!focused && (
           <div
