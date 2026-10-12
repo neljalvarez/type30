@@ -7,7 +7,7 @@ const geist = Geist({ subsets: ['latin'], variable: '--font-geist' })
 const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-geist-mono' })
 
 export const metadata: Metadata = {
-  title: 'typesprint — 30 Second Typing Test',
+  title: 'type30 by nelj',
   description: 'How fast can you type? Take a 30 second typing test and get your words per minute, accuracy, and speed graph.',
   generator: 'v0.app',
   icons: {
