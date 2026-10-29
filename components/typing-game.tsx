@@ -16,8 +16,11 @@ import { TypingResults, type TypingStats } from '@/components/typing-results'
 import { WordDisplay } from '@/components/word-display'
 import { ModeSelector, type Mode } from '@/components/mode-selector'
 import { BossRace } from '@/components/boss-race'
+import { MainMenu } from '@/components/main-menu'
+import { ArrowLeft } from 'lucide-react'
 
 const DURATION = 30
+const RESULTS_LOCK_MS = 2000
 
 type Status = 'idle' | 'running' | 'finished'
 
@@ -32,6 +35,8 @@ export function TypingGame() {
   const [focused, setFocused] = useState(false)
   const [stats, setStats] = useState<TypingStats | null>(null)
   const [mode, setMode] = useState<Mode>('solo')
+  const [screen, setScreen] = useState<'menu' | 'game'>('menu')
+  const [resultsLocked, setResultsLocked] = useState(false)
   const [boss, setBoss] = useState<BossConfig>({
     tierId: BOSS_TIERS[1].id,
     name: BOSS_TIERS[1].name,
@@ -108,9 +113,23 @@ export function TypingGame() {
             }
           : null,
     })
+    setResultsLocked(true)
     setStatus('finished')
     inputRef.current?.blur()
   }, [words, mode, boss])
+
+  // Keep the results on screen for 2s so keys still being pressed can't restart the test.
+  useEffect(() => {
+    if (status !== 'finished') return
+    setResultsLocked(true)
+    const timeout = setTimeout(() => setResultsLocked(false), RESULTS_LOCK_MS)
+    return () => clearTimeout(timeout)
+  }, [status])
+
+  const goToMenu = useCallback(() => {
+    restart()
+    setScreen('menu')
+  }, [restart])
 
   useEffect(() => {
     if (status !== 'running') return
@@ -145,8 +164,10 @@ export function TypingGame() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (screen === 'menu') return
       if (event.key === 'Escape') {
         event.preventDefault()
+        if (status === 'finished' && resultsLocked) return
         restart()
         return
       }
@@ -159,7 +180,12 @@ export function TypingGame() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [status, restart])
+  }, [status, restart, screen, resultsLocked])
+
+  function handleStart(next: Mode) {
+    setMode(next)
+    setScreen('game')
+  }
 
   function recordKey(char: string, hit: boolean) {
     const entry = (keyStatsRef.current[char] ??= { hits: 0, misses: 0 })
@@ -240,12 +266,25 @@ export function TypingGame() {
   const bossChars = mode === 'boss' && status === 'running' ? bossCharsAt(boss.wpm, elapsed) : 0
   const bossCaret = mode === 'boss' && status === 'running' ? bossPosition(words, bossChars) : null
 
+  if (screen === 'menu') {
+    return <MainMenu onStart={handleStart} />
+  }
+
   if (status === 'finished' && stats) {
-    return <TypingResults stats={stats} onRestart={restart} />
+    return <TypingResults stats={stats} onRestart={restart} onMenu={goToMenu} locked={resultsLocked} />
   }
 
   return (
     <section aria-label="Typing test" className="flex w-full flex-col gap-8">
+      <button
+        type="button"
+        onClick={goToMenu}
+        className="inline-flex items-center gap-2 self-start rounded-lg px-2 py-1 font-mono text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
+      >
+        <ArrowLeft className="size-4" aria-hidden="true" />
+        Main menu
+      </button>
+
       <ModeSelector
         mode={mode}
         onModeChange={handleModeChange}

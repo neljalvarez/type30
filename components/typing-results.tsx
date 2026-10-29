@@ -1,3 +1,6 @@
+'use client'
+
+import { useEffect, useRef } from 'react'
 import { RotateCcw, Skull, Trophy } from 'lucide-react'
 import { KeyHeatmap } from '@/components/analytics/key-heatmap'
 import { SpeedChart } from '@/components/analytics/speed-chart'
@@ -14,7 +17,24 @@ function rating(wpm: number) {
   return 'Keep practicing'
 }
 
-export function TypingResults({ stats, onRestart }: { stats: TypingStats; onRestart: () => void }) {
+export function TypingResults({
+  stats,
+  onRestart,
+  onMenu,
+  locked,
+}: {
+  stats: TypingStats
+  onRestart: () => void
+  onMenu: () => void
+  locked: boolean
+}) {
+  const restartRef = useRef<HTMLButtonElement>(null)
+
+  // Only take focus once the 2s lock ends, so leftover keystrokes can't press the button.
+  useEffect(() => {
+    if (!locked) restartRef.current?.focus()
+  }, [locked])
+
   const avgWordSeconds =
     stats.wordTimings.length > 0
       ? (stats.wordTimings.reduce((sum, t) => sum + t.ms, 0) / stats.wordTimings.length / 1000).toFixed(2)
@@ -83,13 +103,22 @@ export function TypingResults({ stats, onRestart }: { stats: TypingStats; onRest
 
       <div className="flex flex-col items-center gap-3">
         <button
+          ref={restartRef}
           type="button"
           onClick={onRestart}
-          autoFocus
-          className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 font-medium text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          disabled={locked}
+          className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 font-medium text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-40 disabled:hover:opacity-40"
         >
           <RotateCcw className="size-4" aria-hidden="true" />
           {stats.boss ? 'Rematch' : 'Try again'}
+        </button>
+        <button
+          type="button"
+          onClick={onMenu}
+          disabled={locked}
+          className="text-sm text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline disabled:opacity-40 disabled:hover:no-underline"
+        >
+          Main menu
         </button>
         <p className="text-sm text-muted-foreground">
           or press <kbd className="rounded bg-secondary px-1.5 py-0.5 font-mono text-xs text-secondary-foreground">Enter</kbd>
