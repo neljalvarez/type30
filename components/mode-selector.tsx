@@ -1,7 +1,8 @@
 'use client'
 
-import { Skull, User } from 'lucide-react'
-import { BOSS_TIERS, CUSTOM_BOSS_MAX, CUSTOM_BOSS_MIN, type BossConfig } from '@/lib/boss'
+import { Music, Skull, User } from 'lucide-react'
+import { PixelSprite } from '@/components/pixel-sprite'
+import { BOSS_TIERS, CUSTOM_BOSS_COLOR, CUSTOM_BOSS_MAX, CUSTOM_BOSS_MIN, CUSTOM_BOSS_SONG, type BossConfig } from '@/lib/boss'
 import { cn } from '@/lib/utils'
 
 export type Mode = 'solo' | 'boss'
@@ -43,6 +44,9 @@ export function ModeSelector({
                 title={tier.name}
                 subtitle={`${tier.wpm} wpm`}
                 caption={tier.tagline}
+                sprite={tier.id}
+                color={tier.color}
+                song={tier.song}
                 onClick={() => onBossChange({ tierId: tier.id, name: tier.name, wpm: tier.wpm })}
               />
             ))}
@@ -52,6 +56,9 @@ export function ModeSelector({
               title="Custom"
               subtitle={boss.tierId === 'custom' ? `${boss.wpm} wpm` : 'You pick'}
               caption="Set the pace"
+              sprite="custom"
+              color={CUSTOM_BOSS_COLOR}
+              song={CUSTOM_BOSS_SONG}
               onClick={() => onBossChange({ tierId: 'custom', name: 'Custom Boss', wpm: boss.wpm })}
             />
           </div>
@@ -117,6 +124,9 @@ function TierButton({
   title,
   subtitle,
   caption,
+  sprite,
+  color,
+  song,
   onClick,
 }: {
   active: boolean
@@ -124,6 +134,9 @@ function TierButton({
   title: string
   subtitle: string
   caption: string
+  sprite: string
+  color: string
+  song: string
   onClick: () => void
 }) {
   return (
@@ -138,9 +151,14 @@ function TierButton({
         active ? 'border-primary bg-primary/10' : 'border-border bg-card hover:border-primary/50',
       )}
     >
+      <PixelSprite sprite={sprite} color={color} className="mb-1 size-10" />
       <span className="text-sm font-medium text-foreground">{title}</span>
       <span className={cn('font-mono text-sm tabular-nums', active ? 'text-primary' : 'text-muted-foreground')}>{subtitle}</span>
       <span className="text-xs text-muted-foreground">{caption}</span>
+      <span className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+        <Music className="size-3 shrink-0" aria-hidden="true" />
+        <span className="truncate">{song}</span>
+      </span>
     </button>
   )
 }

@@ -1,9 +1,30 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { RotateCcw } from 'lucide-react'
+import { ArrowLeft, RotateCcw, Swords } from 'lucide-react'
 import { generateWords } from '@/lib/words'
-import { BOSS_TIERS, bossCharsAt, bossPosition, type BossConfig } from '@/lib/boss'
+import {
+  BOSS_TIERS,
+  BOSS_WORDS,
+  bossCharsAt,
+  bossHealth,
+  bossPosition,
+  bossTheme,
+  passageChars,
+  type BossConfig,
+} from '@/lib/boss'
+import {
+  songForBoss,
+  startMusic,
+  stopMusic,
+  sfxCountdown,
+  sfxError,
+  sfxKey,
+  sfxLose,
+  sfxSelect,
+  sfxWin,
+  sfxWord,
+} from '@/lib/chiptune'
 import {
   computeConsistency,
   countCorrectChars,
@@ -17,12 +38,16 @@ import { WordDisplay } from '@/components/word-display'
 import { ModeSelector, type Mode } from '@/components/mode-selector'
 import { BossRace } from '@/components/boss-race'
 import { MainMenu } from '@/components/main-menu'
-import { ArrowLeft } from 'lucide-react'
+import { LearnToType } from '@/components/learn-to-type'
 
 const DURATION = 30
 const RESULTS_LOCK_MS = 2000
+const COUNTDOWN_STEP_MS = 750
 
-type Status = 'idle' | 'running' | 'finished'
+type Status = 'idle' | 'countdown' | 'running' | 'finished'
+type Screen = 'menu' | 'game' | 'learn'
+
+const makeWords = (seed: number, mode: Mode) => generateWords(seed, mode === 'boss' ? BOSS_WORDS : 200)
 
 export function TypingGame() {
   const [seed, setSeed] = useState(2026)
@@ -32,10 +57,11 @@ export function TypingGame() {
   const [status, setStatus] = useState<Status>('idle')
   const [timeLeft, setTimeLeft] = useState(DURATION)
   const [elapsed, setElapsed] = useState(0)
+  const [countdown, setCountdown] = useState(3)
   const [focused, setFocused] = useState(false)
   const [stats, setStats] = useState<TypingStats | null>(null)
   const [mode, setMode] = useState<Mode>('solo')
-  const [screen, setScreen] = useState<'menu' | 'game'>('menu')
+  const [screen, setScreen] = useState<Screen>('menu')
   const [resultsLocked, setResultsLocked] = useState(false)
   const [boss, setBoss] = useState<BossConfig>({
     tierId: BOSS_TIERS[1].id,
@@ -45,6 +71,7 @@ export function TypingGame() {
 
   const inputRef = useRef<HTMLInputElement>(null)
   const startTimeRef = useRef(0)
+  const finishedRef = useRef(false)
   const typedRef = useRef<string[]>([])
   const currentRef = useRef('')
   const keystrokesRef = useRef({ correct: 0, total: 0 })
@@ -56,67 +83,90 @@ export function TypingGame() {
   const wordTimingsRef = useRef<WordTiming[]>([])
   const lastWordAtRef = useRef(0)
 
+  const isBoss = mode === 'boss'
+
   const focusInput = useCallback(() => {
     requestAnimationFrame(() => inputRef.current?.focus())
   }, [])
 
-  const restart = useCallback(() => {
-    const nextSeed = Math.floor(Math.random() * 2 ** 31)
-    setSeed(nextSeed)
-    setWords(generateWords(nextSeed))
-    setTyped([])
-    setCurrent('')
-    setStatus('idle')
-    setTimeLeft(DURATION)
-    setElapsed(0)
-    setStats(null)
-    typedRef.current = []
-    currentRef.current = ''
-    keystrokesRef.current = { correct: 0, total: 0 }
-    errorsRef.current = 0
-    backspacesRef.current = 0
-    samplesRef.current = []
-    lastSampleRef.current = { total: 0, errors: 0 }
-    keyStatsRef.current = {}
-    wordTimingsRef.current = []
-    focusInput()
-  }, [focusInput])
+  const reset = useCallback(
+    (nextMode: Mode) => {
+      stopMusic()
+      const nextSeed = Math.floor(Math.random() * 2 ** 31)
+      setSeed(nextSeed)
+      setWords(makeWords(nextSeed, nextMode))
+      setTyped([])
+      setCurrent('')
+      setStatus('idle')
+      setTimeLeft(DURATION)
+      setElapsed(0)
+      setCountdown(3)
+      setStats(null)
+      setResultsLocked(false)
+      finishedRef.current = false
+      typedRef.current = []
+      currentRef.current = ''
+      keystrokesRef.current = { correct: 0, total: 0 }
+      errorsRef.current = 0
+      backspacesRef.current = 0
+      samplesRef.current = []
+      lastSampleRef.current = { total: 0, errors: 0 }
+      keyStatsRef.current = {}
+      wordTimingsRef.current = []
+      focusInput()
+    },
+    [focusInput],
+  )
 
-  const finish = useCallback(() => {
-    const correctChars = countCorrectChars(words, typedRef.current, currentRef.current)
-    const { correct, total } = keystrokesRef.current
-    const samples = samplesRef.current
-    const typedWords = typedRef.current
-    const wordsTyped = typedWords.filter((w, i) => w === words[i]).length
+  const restart = useCallback(() => reset(mode), [reset, mode])
 
-    setStats({
-      wpm: toWpm(correctChars, DURATION),
-      rawWpm: toWpm(total, DURATION),
-      accuracy: total === 0 ? 0 : Math.round((correct / total) * 100),
-      correctChars: correct,
-      incorrectChars: total - correct,
-      wordsTyped,
-      wordsMissed: typedWords.length - wordsTyped,
-      backspaces: backspacesRef.current,
-      consistency: computeConsistency(samples.map((s) => s.raw)),
-      peakWpm: Math.max(0, ...samples.slice(2).map((s) => s.wpm)),
-      samples,
-      keyStats: keyStatsRef.current,
-      wordTimings: wordTimingsRef.current,
-      boss:
-        mode === 'boss'
+  const finish = useCallback(
+    (outcome: 'win' | 'lose' = 'win') => {
+      if (finishedRef.current) return
+      finishedRef.current = true
+      stopMusic()
+
+      const seconds = isBoss ? Math.max((performance.now() - startTimeRef.current) / 1000, 1) : DURATION
+      const correctChars = countCorrectChars(words, typedRef.current, currentRef.current)
+      const { correct, total } = keystrokesRef.current
+      const samples = samplesRef.current
+      const typedWords = typedRef.current
+      const wordsTyped = typedWords.filter((w, i) => w === words[i]).length
+
+      setStats({
+        wpm: toWpm(correctChars, seconds),
+        rawWpm: toWpm(total, seconds),
+        accuracy: total === 0 ? 0 : Math.round((correct / total) * 100),
+        correctChars: correct,
+        incorrectChars: total - correct,
+        wordsTyped,
+        wordsMissed: typedWords.length - wordsTyped,
+        backspaces: backspacesRef.current,
+        consistency: computeConsistency(samples.map((s) => s.raw)),
+        peakWpm: Math.max(0, ...samples.slice(2).map((s) => s.wpm)),
+        samples,
+        keyStats: keyStatsRef.current,
+        wordTimings: wordTimingsRef.current,
+        boss: isBoss
           ? {
+              tierId: boss.tierId,
               name: boss.name,
               wpm: boss.wpm,
-              chars: Math.round(bossCharsAt(boss.wpm, DURATION)),
+              chars: Math.min(Math.round(bossCharsAt(boss.wpm, seconds)), passageChars(words)),
               playerChars: correctChars,
+              won: outcome === 'win',
+              seconds,
+              song: bossTheme(boss.tierId).song,
             }
           : null,
-    })
-    setResultsLocked(true)
-    setStatus('finished')
-    inputRef.current?.blur()
-  }, [words, mode, boss])
+      })
+      setResultsLocked(true)
+      setStatus('finished')
+      inputRef.current?.blur()
+      if (isBoss) (outcome === 'win' ? sfxWin : sfxLose)()
+    },
+    [words, isBoss, boss],
+  )
 
   // Keep the results on screen for 2s so keys still being pressed can't restart the test.
   useEffect(() => {
@@ -126,33 +176,73 @@ export function TypingGame() {
     return () => clearTimeout(timeout)
   }, [status])
 
+  useEffect(() => () => stopMusic(), [])
+
   const goToMenu = useCallback(() => {
     restart()
     setScreen('menu')
   }, [restart])
 
+  // Boss intro: 3, 2, 1, GO, then the race and the theme song begin together.
+  useEffect(() => {
+    if (status !== 'countdown') return
+    let count = 3
+    setCountdown(3)
+    sfxCountdown(false)
+    const interval = setInterval(() => {
+      count -= 1
+      if (count > 0) {
+        setCountdown(count)
+        sfxCountdown(false)
+        return
+      }
+      clearInterval(interval)
+      setCountdown(0)
+      sfxCountdown(true)
+      startTimeRef.current = performance.now()
+      lastWordAtRef.current = startTimeRef.current
+      setStatus('running')
+      startMusic(songForBoss(boss.tierId, boss.wpm))
+      focusInput()
+    }, COUNTDOWN_STEP_MS)
+    return () => clearInterval(interval)
+  }, [status, boss, focusInput])
+
   useEffect(() => {
     if (status !== 'running') return
+    const total = passageChars(words)
     const interval = setInterval(() => {
       const now = (performance.now() - startTimeRef.current) / 1000
-      const elapsedWhole = Math.min(Math.floor(now), DURATION)
+      const cap = isBoss ? Infinity : DURATION
+      const elapsedWhole = Math.floor(Math.min(now, cap))
 
       while (samplesRef.current.length < elapsedWhole) {
         const second = samplesRef.current.length + 1
         const chars = countCorrectChars(words, typedRef.current, currentRef.current)
-        const total = keystrokesRef.current.total
+        const keys = keystrokesRef.current.total
         const errors = errorsRef.current
         samplesRef.current.push({
           second,
           wpm: toWpm(chars, second),
-          raw: (total - lastSampleRef.current.total) * 12,
+          raw: (keys - lastSampleRef.current.total) * 12,
           errors: errors - lastSampleRef.current.errors,
         })
-        lastSampleRef.current = { total, errors }
+        lastSampleRef.current = { total: keys, errors }
+      }
+
+      setElapsed(Math.min(now, cap))
+
+      if (isBoss) {
+        const bossChars = bossCharsAt(boss.wpm, now)
+        const playerChars = countCorrectChars(words, typedRef.current, currentRef.current)
+        if (bossChars >= total || bossHealth(playerChars, bossChars) <= 0) {
+          clearInterval(interval)
+          finish('lose')
+        }
+        return
       }
 
       const remaining = Math.max(DURATION - now, 0)
-      setElapsed(Math.min(now, DURATION))
       setTimeLeft(Math.ceil(remaining))
       if (remaining <= 0) {
         clearInterval(interval)
@@ -160,11 +250,17 @@ export function TypingGame() {
       }
     }, 100)
     return () => clearInterval(interval)
-  }, [status, words, finish])
+  }, [status, words, finish, isBoss, boss])
+
+  const startFight = useCallback(() => {
+    if (!isBoss || status !== 'idle') return
+    sfxSelect()
+    setStatus('countdown')
+  }, [isBoss, status])
 
   useEffect(() => {
+    if (screen !== 'game') return
     function onKeyDown(event: KeyboardEvent) {
-      if (screen === 'menu') return
       if (event.key === 'Escape') {
         event.preventDefault()
         if (status === 'finished' && resultsLocked) return
@@ -172,6 +268,11 @@ export function TypingGame() {
         return
       }
       if (status === 'finished') return
+      if (event.key === 'Enter' && isBoss && status === 'idle') {
+        event.preventDefault()
+        startFight()
+        return
+      }
       const target = event.target as HTMLElement | null
       if (target?.tagName === 'INPUT' && target !== inputRef.current) return
       if (document.activeElement !== inputRef.current && event.key.length === 1 && !event.metaKey && !event.ctrlKey) {
@@ -180,12 +281,7 @@ export function TypingGame() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [status, restart, screen, resultsLocked])
-
-  function handleStart(next: Mode) {
-    setMode(next)
-    setScreen('game')
-  }
+  }, [status, restart, screen, resultsLocked, isBoss, startFight])
 
   function recordKey(char: string, hit: boolean) {
     const entry = (keyStatsRef.current[char] ??= { hits: 0, misses: 0 })
@@ -201,6 +297,8 @@ export function TypingGame() {
 
   function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
     if (status === 'finished') return
+    // In a boss fight you can only type once the countdown hits GO.
+    if (isBoss && status !== 'running') return
     setFocused(true)
     const value = event.target.value
     const previous = currentRef.current
@@ -223,6 +321,15 @@ export function TypingGame() {
       const hit = word === target
       registerKeystroke(hit)
       recordKey(' ', hit)
+
+      // Boss fights are strict: a wrong word blocks you until you fix it.
+      if (isBoss && !hit) {
+        sfxError()
+        setCurrent(word)
+        currentRef.current = word
+        return
+      }
+
       wordTimingsRef.current.push({ word: target, typed: word, ms: now - lastWordAtRef.current })
       lastWordAtRef.current = now
 
@@ -231,7 +338,8 @@ export function TypingGame() {
       currentRef.current = ''
       setTyped(nextTyped)
       setCurrent('')
-      if (nextTyped.length >= words.length) finish()
+      if (isBoss) sfxWord()
+      if (nextTyped.length >= words.length) finish('win')
       return
     }
 
@@ -241,6 +349,7 @@ export function TypingGame() {
         const hit = value[i] === expected
         registerKeystroke(hit)
         if (expected) recordKey(expected, hit)
+        if (isBoss) (hit ? sfxKey : sfxError)()
       }
     } else if (value.length < previous.length) {
       backspacesRef.current += previous.length - value.length
@@ -250,9 +359,15 @@ export function TypingGame() {
     setCurrent(value)
   }
 
+  function handleStart(next: Mode) {
+    setMode(next)
+    reset(next)
+    setScreen('game')
+  }
+
   function handleModeChange(next: Mode) {
     setMode(next)
-    focusInput()
+    reset(next)
   }
 
   function handleBossChange(next: BossConfig) {
@@ -260,14 +375,20 @@ export function TypingGame() {
     if (next.tierId !== 'custom') focusInput()
   }
 
-  const elapsedSeconds = DURATION - timeLeft
+  const total = passageChars(words)
   const playerChars = countCorrectChars(words, typed, current)
-  const liveWpm = status === 'running' && elapsedSeconds >= 2 ? toWpm(playerChars, elapsedSeconds) : 0
-  const bossChars = mode === 'boss' && status === 'running' ? bossCharsAt(boss.wpm, elapsed) : 0
-  const bossCaret = mode === 'boss' && status === 'running' ? bossPosition(words, bossChars) : null
+  const liveWpm = status === 'running' && elapsed >= 2 ? toWpm(playerChars, elapsed) : 0
+  const bossChars = isBoss && status === 'running' ? bossCharsAt(boss.wpm, elapsed) : 0
+  const bossCaret = isBoss && status === 'running' ? bossPosition(words, bossChars) : null
+  const waitingForFight = isBoss && (status === 'idle' || status === 'countdown')
+  const showGo = isBoss && status === 'running' && elapsed < 0.8
 
   if (screen === 'menu') {
-    return <MainMenu onStart={handleStart} />
+    return <MainMenu onStart={handleStart} onLearn={() => setScreen('learn')} />
+  }
+
+  if (screen === 'learn') {
+    return <LearnToType onExit={() => setScreen('menu')} />
   }
 
   if (status === 'finished' && stats) {
@@ -290,14 +411,14 @@ export function TypingGame() {
         onModeChange={handleModeChange}
         boss={boss}
         onBossChange={handleBossChange}
-        disabled={status === 'running'}
+        disabled={status === 'running' || status === 'countdown'}
       />
 
       <div className="flex items-end justify-between font-mono">
         <div className="flex flex-col">
           <span className="text-xs uppercase tracking-widest text-muted-foreground">Time</span>
           <span className="text-5xl font-semibold tabular-nums text-primary" aria-live="off">
-            {timeLeft}
+            {isBoss ? `${elapsed.toFixed(1)}s` : timeLeft}
           </span>
         </div>
         <div className="flex flex-col items-end">
@@ -306,13 +427,15 @@ export function TypingGame() {
         </div>
       </div>
 
-      {mode === 'boss' ? (
+      {isBoss ? (
         <BossRace
-          playerChars={playerChars}
-          bossChars={bossChars}
+          tierId={boss.tierId}
           bossName={boss.name}
           bossWpm={boss.wpm}
-          finishChars={bossCharsAt(boss.wpm, DURATION)}
+          playerChars={playerChars}
+          bossChars={bossChars}
+          totalChars={total}
+          active={status === 'running'}
         />
       ) : (
         <div className="h-1 w-full overflow-hidden rounded-full bg-secondary" aria-hidden="true">
@@ -344,11 +467,41 @@ export function TypingGame() {
           words={words}
           typed={typed}
           current={current}
-          blurred={!focused}
+          blurred={waitingForFight || !focused}
           bossWord={bossCaret?.word}
           bossChar={bossCaret?.char}
         />
-        {!focused && (
+
+        {isBoss && status === 'idle' && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center">
+            <button
+              type="button"
+              onClick={startFight}
+              className="inline-flex items-center gap-3 rounded-xl border-2 border-foreground bg-primary px-8 py-4 font-mono text-2xl font-semibold tracking-widest text-primary-foreground shadow-[4px_4px_0_0_var(--foreground)] transition-transform hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"
+            >
+              <Swords className="size-6" aria-hidden="true" />
+              FIGHT!
+            </button>
+          </div>
+        )}
+
+        {isBoss && status === 'countdown' && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center" aria-live="assertive">
+            <span key={countdown} className="pixel-pop font-mono text-8xl font-bold text-primary" style={{ textShadow: '4px 4px 0 var(--foreground)' }}>
+              {countdown}
+            </span>
+          </div>
+        )}
+
+        {showGo && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center" aria-hidden="true">
+            <span className="pixel-pop font-mono text-8xl font-bold text-primary" style={{ textShadow: '4px 4px 0 var(--foreground)' }}>
+              GO!
+            </span>
+          </div>
+        )}
+
+        {!isBoss && !focused && (
           <div
             className="pointer-events-none absolute inset-0 flex items-center justify-center text-lg text-foreground"
             aria-hidden="true"
@@ -367,8 +520,12 @@ export function TypingGame() {
         >
           <RotateCcw className="size-5" aria-hidden="true" />
         </button>
-        <p className="text-sm text-muted-foreground">
-          {status === 'idle' ? 'The timer starts on your first keystroke. ' : ''}
+        <p className="text-center text-sm text-muted-foreground">
+          {isBoss && status === 'idle'
+            ? 'Reach the end before the boss does. Every word has to be right to move on. Press Enter to fight. '
+            : status === 'idle'
+              ? 'The timer starts on your first keystroke. '
+              : ''}
           Press{' '}
           <kbd className="rounded bg-secondary px-1.5 py-0.5 font-mono text-xs text-secondary-foreground">Esc</kbd>{' '}
           to restart

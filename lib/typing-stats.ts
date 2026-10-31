@@ -14,10 +14,17 @@ export type WordTiming = {
 }
 
 export type BossResult = {
+  tierId: string
   name: string
   wpm: number
+  /** Characters the boss had typed when the fight ended. */
   chars: number
   playerChars: number
+  /** Whether you finished the passage before the boss. */
+  won: boolean
+  /** How long the fight lasted, in seconds. */
+  seconds: number
+  song: string
 }
 
 export type TypingStats = {

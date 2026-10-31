@@ -5,7 +5,7 @@ import { RotateCcw, Skull, Trophy } from 'lucide-react'
 import { KeyHeatmap } from '@/components/analytics/key-heatmap'
 import { SpeedChart } from '@/components/analytics/speed-chart'
 import { WordBreakdown } from '@/components/analytics/word-breakdown'
-import { toWpm, type BossResult, type TypingStats } from '@/lib/typing-stats'
+import type { BossResult, TypingStats } from '@/lib/typing-stats'
 
 export type { TypingStats }
 
@@ -129,9 +129,10 @@ export function TypingResults({
 }
 
 function BossVerdict({ boss, playerWpm }: { boss: BossResult; playerWpm: number }) {
-  const bossWpm = toWpm(boss.chars, 30)
-  const won = boss.playerChars > boss.chars
+  const bossWpm = boss.wpm
+  const won = boss.won
   const margin = Math.abs(Math.round(boss.playerChars - boss.chars))
+  const seconds = boss.seconds.toFixed(1)
 
   return (
     <div
@@ -154,8 +155,11 @@ function BossVerdict({ boss, playerWpm }: { boss: BossResult; playerWpm: number 
       <div className="flex flex-1 flex-col gap-0.5">
         <p className="text-xl font-semibold">{won ? `You defeated ${boss.name}` : `${boss.name} wins this round`}</p>
         <p className={won ? 'text-sm text-primary-foreground/80' : 'text-sm text-muted-foreground'}>
-          {won ? `Ahead by ${margin} characters.` : `You were ${margin} characters behind. Run it back.`}
+          {won
+            ? `Finished in ${seconds}s, ${margin} characters ahead.`
+            : `Knocked out after ${seconds}s, ${margin} characters behind. Run it back.`}
         </p>
+        <p className={won ? 'text-xs text-primary-foreground/70' : 'text-xs text-muted-foreground'}>♪ {boss.song}</p>
       </div>
       <div className="hidden items-center gap-3 font-mono tabular-nums sm:flex">
         <div className="flex flex-col items-end">
